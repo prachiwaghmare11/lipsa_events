@@ -2,7 +2,14 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const path = require("path");
+const multer = require("multer"); // ⬅️ For handling file uploads (multipart/form-data)
+const cloudinary = require("cloudinary").v2; // ⬅️ For cloud storage
 
+const Booking = require("./models/Booking");
+const Portfolio = require("./models/Portfolio");
+const Testimonial = require("./models/Testimonial");
+const PortfolioItem = require("./models/PortfolioItem");
 // Load environment variables from .env file
 dotenv.config();
 
@@ -22,11 +29,6 @@ mongoose
     console.error("MongoDB connection error:", err.message);
     process.exit(1); // Exit process with failure
   });
-
-// --- Models (Imported for use in routes) ---
-const Booking = require("./models/Booking");
-const Portfolio = require("./models/Portfolio");
-const Testimonial = require("./models/Testimonial");
 
 // --- API Routes ---
 
@@ -98,6 +100,147 @@ const placeholderTestimonials = [
   },
 ];
 
+// --- Multer Configuration ---
+// We use memory storage for temporary file handling before uploading to Cloudinary
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+
+// --- Cloudinary Configuration ---
+// Make sure these variables are set in your server/.env file
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Middleware
+app.use(cors()); // Allows cross-origin requests from the React client
+app.use(express.json()); // To parse JSON bodies
+
+// --- MongoDB Connection ---
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => console.log("MongoDB connected successfully"))
+  .catch((err) => console.error("MongoDB connection error:", err));
+
+// ===========================================
+//           UPDATED API ROUTE (Portfolio)
+// ===========================================
+
+/**
+ * Handles media upload (Image or Video) to Cloudinary
+ * and saves the resulting URL to MongoDB.
+ * The form field for the file must be named 'media'.
+ */
+app.post("/api/portfolio", upload.single("media"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No media file provided." });
+    }
+
+    // 1. Upload file buffer to Cloudinary
+    // Use auto detection for resource type (image or video)
+    const result = await cloudinary.uploader.upload(
+      `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`,
+      {
+        folder: "lipsa-events-portfolio", // Folder in your Cloudinary account
+        resource_type: "auto", // Auto-detects if it's an image or video
+        chunk_size: 6000000, // Recommended for large files like videos
+      }
+    );
+
+    const mediaType = result.resource_type;
+    let updateFields = {
+      title: req.body.title || "Untitled Event",
+      description: req.body.description || "",
+      category: req.body.category || "other",
+    };
+
+    // 2. Determine and save the correct URL field (imageUrl or videoUrl)
+    if (mediaType === "image") {
+      updateFields.imageUrl = result.secure_url;
+    } else if (mediaType === "video") {
+      updateFields.videoUrl = result.secure_url;
+    } else {
+      return res
+        .status(400)
+        .json({ message: "Unsupported media type uploaded." });
+    }
+
+    // 3. Save the new portfolio item to MongoDB
+    const newPortfolioItem = new PortfolioItem(updateFields);
+    await newPortfolioItem.save();
+
+    res.status(201).json({
+      message: "Portfolio item created successfully!",
+      item: newPortfolioItem,
+    });
+  } catch (error) {
+    console.error("Upload Error:", error);
+    res
+      .status(500)
+      .json({
+        message: "Failed to upload and save portfolio item.",
+        error: error.message,
+      });
+  }
+});
+
+/**
+ * Route to fetch all portfolio items
+ */
+app.get("/api/portfolio", async (req, res) => {
+  try {
+    const items = await PortfolioItem.find({});
+    res.status(200).json(items);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch portfolio items." });
+  }
+});
+
+// ===========================================
+//           Other API ROUTES (Bookings)
+// ===========================================
+
+app.post("/api/bookings", async (req, res) => {
+  try {
+    const newBooking = new Booking(req.body);
+    await newBooking.save();
+    res
+      .status(201)
+      .json({ message: "Booking request received!", booking: newBooking });
+  } catch (error) {
+    console.error("Error saving booking:", error);
+    res
+      .status(500)
+      .json({ message: "Failed to submit booking.", error: error.message });
+  }
+});
+
+app.get("/api/", async (req, res) => {
+  try {
+    res.status(201).json({ message: "API request received!" });
+  } catch (error) {
+    console.error("Error saving booking:", error);
+    res
+      .status(500)
+      .json({ message: "Failed to request API.", error: error.message });
+  }
+});
+
+// Serve the static React build files in production (Keep this for deployment)
+if (process.env.NODE_ENV === "production") {
+  app.use(express.static(path.join(__dirname, "../client/build")));
+
+  app.get("*", (req, res) => {
+    res.sendFile(path.resolve(__dirname, "../client", "build", "index.html"));
+  });
+}
+
+// Start Server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 app.get("/api/portfolio", (req, res) => {
   // In a production app, you would fetch from MongoDB: Portfolio.find({})
   res.status(200).json(placeholderPortfolio);
