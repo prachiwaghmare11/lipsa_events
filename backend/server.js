@@ -177,12 +177,10 @@ app.post("/api/portfolio", upload.single("media"), async (req, res) => {
     });
   } catch (error) {
     console.error("Upload Error:", error);
-    res
-      .status(500)
-      .json({
-        message: "Failed to upload and save portfolio item.",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Failed to upload and save portfolio item.",
+      error: error.message,
+    });
   }
 });
 
